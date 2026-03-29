@@ -1,0 +1,22 @@
+{
+  "Bengaluru": {
+    "records": 403201,
+    "zones": 8
+  },
+  "Hyderabad": {
+    "records": 290677,
+    "zones": 8
+  },
+  "Mumbai": {
+    "records": 276103,
+    "zones": 12
+  },
+  "Delhi": {
+    "records": 1751778,
+    "zones": 60
+  },
+  "Chennai": {
+    "records": 112267,
+    "zones": 8
+  }
+}

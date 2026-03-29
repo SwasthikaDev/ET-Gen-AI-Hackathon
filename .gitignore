@@ -1,0 +1,50 @@
+# Environment & secrets
+.env
+.env.local
+.env.*.local
+*.pem
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.venv/
+venv/
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+.turbo/
+*.tsbuildinfo
+
+# Large / local data (download via Kaggle; regenerate with pipeline)
+backend/data/raw/ncrb/**/*.csv
+backend/data/processed/*.csv
+backend/data/processed/*.parquet
+backend/data/synthetic/*.csv
+!backend/data/synthetic/.gitkeep
+
+# Trained models (regenerate: python -m backend.data.data_pipeline)
+backend/models/saved/*.pkl
+
+# IDE & OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Test / coverage
+.coverage
+htmlcov/
+.pytest_cache/
