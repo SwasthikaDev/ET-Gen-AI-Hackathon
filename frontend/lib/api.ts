@@ -87,6 +87,15 @@ export async function fetchBriefing(city: string, language = "en"): Promise<Brie
   return post.json();
 }
 
+export async function fetchLiveWeather(
+  city: string
+): Promise<{ temperature_c: number; precipitation_mm: number; wind_speed_kmh: number }> {
+  const r = await fetch(`${BASE}/api/v1/weather/${encodeURIComponent(city)}`);
+  if (!r.ok) throw new Error(await r.text());
+  const data = await r.json();
+  return data.weather;
+}
+
 export async function submitFeedback(data: {
   zone_id: string;
   shift_date: string;

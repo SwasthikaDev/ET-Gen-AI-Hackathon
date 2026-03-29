@@ -9,12 +9,12 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#0f172a",
+  themeColor: "#f4f7fb",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className="dark">
+    <html lang="en">
       <head>
         <link
           rel="stylesheet"
@@ -22,7 +22,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           crossOrigin=""
         />
       </head>
-      <body className="bg-slate-950 text-slate-100 antialiased">{children}</body>
+      <body className="bg-slate-100 text-slate-900 antialiased">{children}</body>
     </html>
   );
 }

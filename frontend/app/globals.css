@@ -7,18 +7,35 @@
   --risk-medium: #f97316;
   --risk-low-warn: #eab308;
   --risk-low: #22c55e;
+  --surface: #f4f7fb;
+  --surface-card: #ffffff;
+  --surface-soft: #eef3fb;
+  --text-main: #0f172a;
+  --text-muted: #475569;
+  --border-soft: #dbe4f2;
+  --brand: #1d4ed8;
 }
 
 body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: var(--surface);
+  color: var(--text-main);
 }
 
-/* Leaflet dark mode overrides */
+/* Leaflet light mode overrides */
 .leaflet-container {
-  background: #1e293b !important;
+  background: #e8f0fb !important;
 }
 .leaflet-tile {
-  filter: invert(1) hue-rotate(180deg) brightness(0.9) saturate(0.7);
+  filter: saturate(0.95) brightness(1.03);
+}
+.leaflet-popup-content-wrapper {
+  border: 1px solid var(--border-soft);
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.1);
+}
+.leaflet-popup-tip {
+  border-top-color: #ffffff !important;
 }
 
 /* Pulsing HIGH-risk marker */

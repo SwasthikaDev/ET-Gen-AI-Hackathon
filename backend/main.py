@@ -268,6 +268,13 @@ async def submit_feedback(req: FeedbackRequest):
     return {"status": "recorded", "zone_id": req.zone_id}
 
 
+@app.get("/api/v1/weather/{city}")
+async def get_weather(city: str):
+    """Live weather for a city from Open-Meteo (free, no API key)."""
+    weather = await fetch_weather(city)
+    return {"city": city, "weather": weather, "fetched_at": datetime.now().isoformat()}
+
+
 @app.get("/api/v1/cities")
 async def list_cities():
     zones_by_city = app_state.get("zones_by_city", {})
