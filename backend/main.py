@@ -23,6 +23,7 @@ from backend.models.predictor import CrimePredictor
 from backend.services.briefing_service import BriefingService
 from backend.services.scheduler import create_scheduler
 from backend.data.weather_fetcher import get_current_weather as fetch_weather
+from backend.services.news_intelligence import get_city_news_signals
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("crimewatch")
@@ -278,6 +279,73 @@ async def get_weather(city: str):
     """Live weather for a city from Open-Meteo (free, no API key)."""
     weather = await fetch_weather(city)
     return {"city": city, "weather": weather, "fetched_at": datetime.now().isoformat()}
+
+
+@app.get("/api/v1/news/{city}")
+async def get_city_news(city: str):
+    """
+    NewsWatch Intelligence — live crime news signals for a city.
+    Fetches ET, NDTV, TOI, HT RSS feeds → GPT-4o / regex extraction.
+    Cached 20 min to avoid hammering news APIs.
+    """
+    signals = await get_city_news_signals(city)
+    high = sum(1 for s in signals if s["severity"] == "HIGH")
+    return {
+        "city": city,
+        "signal_count": len(signals),
+        "high_severity": high,
+        "signals": signals,
+        "fetched_at": datetime.now().isoformat(),
+    }
+
+
+@app.get("/api/v1/forecast/{city}")
+async def get_risk_forecast(city: str):
+    """
+    24-hour risk forecast for a city.
+    Runs heuristic predictor at 6 forecast windows (current, +3h, +6h,
+    +9h, +12h, +18h, +24h) and returns aggregate HIGH zone count + top zone.
+    """
+    predictor: CrimePredictor = app_state.get("predictor")
+    zones_by_city = app_state.get("zones_by_city", {})
+    zones = zones_by_city.get(city)
+    if not zones:
+        raise HTTPException(404, f"City '{city}' not found.")
+
+    weather = await fetch_weather(city)
+    now = datetime.now()
+    offsets_h = [0, 3, 6, 9, 12, 18, 24]
+    windows = []
+    for offset in offsets_h:
+        from datetime import timedelta
+        target = now.replace(minute=0, second=0, microsecond=0)
+        target = target + timedelta(hours=offset)
+        preds = predictor.predict_city(zones, target, weather)
+        high = sum(1 for p in preds if p["risk_level"] == "HIGH")
+        med = sum(1 for p in preds if p["risk_level"] == "MEDIUM")
+        low = sum(1 for p in preds if p["risk_level"] == "LOW")
+        avg_score = round(sum(p["risk_score"] for p in preds) / max(len(preds), 1), 3)
+        top_zone = preds[0]["zone_id"] if preds else ""
+        windows.append({
+            "hour_offset": offset,
+            "timestamp": target.isoformat(),
+            "label": target.strftime("%I %p"),
+            "high": high,
+            "medium": med,
+            "low": low,
+            "avg_risk_score": avg_score,
+            "top_zone": top_zone,
+        })
+
+    peak = max(windows, key=lambda w: w["high"])
+    return {
+        "city": city,
+        "total_zones": len(zones),
+        "windows": windows,
+        "peak_hour": peak["label"],
+        "peak_high_zones": peak["high"],
+        "generated_at": now.isoformat(),
+    }
 
 
 @app.get("/api/v1/cities")

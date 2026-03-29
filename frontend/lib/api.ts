@@ -87,6 +87,62 @@ export async function fetchBriefing(city: string, language = "en"): Promise<Brie
   return post.json();
 }
 
+// ── NewsWatch types ─────────────────────────────────────────────────────────
+
+export interface NewsSignal {
+  title: string;
+  summary: string;
+  source: string;
+  published_at: string;
+  crime_type: string;
+  severity: "HIGH" | "MEDIUM" | "LOW";
+  location_hint: string;
+  city: string;
+  url: string;
+}
+
+export interface NewsResponse {
+  city: string;
+  signal_count: number;
+  high_severity: number;
+  signals: NewsSignal[];
+  fetched_at: string;
+}
+
+// ── Forecast types ───────────────────────────────────────────────────────────
+
+export interface ForecastWindow {
+  hour_offset: number;
+  timestamp: string;
+  label: string;
+  high: number;
+  medium: number;
+  low: number;
+  avg_risk_score: number;
+  top_zone: string;
+}
+
+export interface ForecastResponse {
+  city: string;
+  total_zones: number;
+  windows: ForecastWindow[];
+  peak_hour: string;
+  peak_high_zones: number;
+  generated_at: string;
+}
+
+export async function fetchNewsSignals(city: string): Promise<NewsResponse> {
+  const r = await fetch(`${BASE}/api/v1/news/${encodeURIComponent(city)}`);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function fetchForecast(city: string): Promise<ForecastResponse> {
+  const r = await fetch(`${BASE}/api/v1/forecast/${encodeURIComponent(city)}`);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
 export async function fetchLiveWeather(
   city: string
 ): Promise<{ temperature_c: number; precipitation_mm: number; wind_speed_kmh: number }> {
