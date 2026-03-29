@@ -114,6 +114,11 @@ def _load_zones() -> dict[str, list[dict]]:
         logger.warning("No zones file found. Run: python -m backend.data.data_pipeline")
         return {}
     df = pd.read_csv(zones_path)
+    # Deduplicate: keep first occurrence per (zone_id, city) pair
+    before = len(df)
+    df = df.drop_duplicates(subset=["zone_id", "city"], keep="first").reset_index(drop=True)
+    if len(df) < before:
+        logger.info(f"Deduplicated zones: {before} → {len(df)} rows")
     result: dict[str, list[dict]] = {}
     for city, grp in df.groupby("city"):
         result[str(city)] = grp.to_dict("records")

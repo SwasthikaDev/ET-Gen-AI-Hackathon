@@ -352,12 +352,31 @@ class CrimePredictor:
         target_dt: datetime,
         weather: dict[str, float],
     ) -> list[dict]:
-        """Batch-predict all zones for a city. Returns sorted by risk_score desc."""
-        results = [
-            self.predict_zone(zone, target_dt, weather)
-            for zone in city_zones
-        ]
-        return sorted(results, key=lambda r: r["risk_score"], reverse=True)
+        """Batch-predict all zones for a city. Returns sorted by risk_score desc.
+
+        Risk levels are assigned by within-city percentile so every prediction
+        shows a realistic HIGH / MEDIUM / LOW spread regardless of absolute scores:
+          - Top 40 % of zones by risk_score → HIGH
+          - Next 30 %                       → MEDIUM
+          - Bottom 30 %                     → LOW
+        """
+        results = [self.predict_zone(zone, target_dt, weather) for zone in city_zones]
+        results.sort(key=lambda r: r["risk_score"], reverse=True)
+
+        n = len(results)
+        risk_colours = {"HIGH": "red", "MEDIUM": "orange", "LOW": "green"}
+        for i, r in enumerate(results):
+            pct = i / max(n - 1, 1)          # 0.0 = top, 1.0 = bottom
+            if pct < 0.40:
+                level = "HIGH"
+            elif pct < 0.70:
+                level = "MEDIUM"
+            else:
+                level = "LOW"
+            r["risk_level"] = level
+            r["risk_colour"] = risk_colours[level]
+
+        return results
 
 
 def _heuristic_drivers(row: pd.DataFrame) -> list[dict]:
