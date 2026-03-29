@@ -122,6 +122,30 @@ SHAP_PHRASES: dict[str, dict[str, str]] = {
         "pos": "high temperatures increase outdoor activity and opportunity crime",
         "neg": "cool temperature reduces outdoor crowd size",
     },
+    "residential_crime_pct": {
+        "pos": "historically high proportion of burglaries and domestic crimes in residential areas",
+        "neg": "low residential crime density in this state",
+    },
+    "highway_crime_pct": {
+        "pos": "high proportion of highway robbery and vehicle crime in this state",
+        "neg": "low highway crime rate in this state",
+    },
+    "market_crime_pct": {
+        "pos": "high market and commercial area crime — pickpocketing and snatch risk",
+        "neg": "low commercial area crime in this state",
+    },
+    "gang_murder_pct": {
+        "pos": "high gang/property-motive murder proportion — elevated organised crime risk",
+        "neg": "low gang-motive murder proportion in this state",
+    },
+    "domestic_murder_pct": {
+        "pos": "high domestic-motive murder proportion — elevated household violence risk",
+        "neg": "low domestic violence escalation in this state",
+    },
+    "police_complaint_rate": {
+        "pos": "high complaints against police — reduced public trust and deterrence",
+        "neg": "low complaints against police — community cooperation likely",
+    },
 }
 
 
@@ -308,11 +332,18 @@ class CrimePredictor:
             "shap_drivers": shap_drivers,
             "predicted_for": target_dt.isoformat(),
             # Enriched NCRB multi-source context (passed through for frontend display)
-            "women_safety_index": float(zone.get("women_safety_index", 0)),
-            "vulnerability_index": float(zone.get("vulnerability_index", 0)),
-            "police_coverage_ratio": float(zone.get("police_coverage_ratio", 0.75)),
+            "women_safety_index":         float(zone.get("women_safety_index", 0)),
+            "vulnerability_index":        float(zone.get("vulnerability_index", 0)),
+            "police_coverage_ratio":      float(zone.get("police_coverage_ratio", 0.75)),
             "property_value_stolen_lakh": float(zone.get("property_value_stolen_lakh", 0)),
-            "state_auto_theft_count": int(zone.get("state_auto_theft_count", 0)),
+            "state_auto_theft_count":     int(zone.get("state_auto_theft_count", 0)),
+            "residential_crime_pct":      float(zone.get("residential_crime_pct", 0.33)),
+            "highway_crime_pct":          float(zone.get("highway_crime_pct", 0.15)),
+            "market_crime_pct":           float(zone.get("market_crime_pct", 0.20)),
+            "gang_murder_pct":            float(zone.get("gang_murder_pct", 0.10)),
+            "domestic_murder_pct":        float(zone.get("domestic_murder_pct", 0.20)),
+            "police_complaint_rate":      float(zone.get("police_complaint_rate", 0.30)),
+            "zone_type":                  zone.get("zone_type", "mixed"),
         }
 
     def predict_city(
@@ -340,12 +371,15 @@ def _heuristic_drivers(row: pd.DataFrame) -> list[dict]:
         ("lighting_score",              0.5,     "neg"),
         ("nearest_police_station_km",   2.0,     "pos"),
         ("population_density",          20000,   "pos"),
-        # Enriched
+        # Enriched NCRB features
         ("women_safety_index",          400,     "pos"),
         ("vulnerability_index",         200,     "pos"),
         ("police_coverage_ratio",       0.7,     "neg"),  # below threshold = understaffed
         ("property_value_stolen_lakh",  50000,   "pos"),
         ("state_auto_theft_count",      200000,  "pos"),
+        ("gang_murder_pct",             0.15,    "pos"),
+        ("domestic_murder_pct",         0.25,    "pos"),
+        ("police_complaint_rate",       0.5,     "pos"),
     ]
     for feat, threshold, direction in checks:
         if feat not in row.columns:
@@ -439,6 +473,35 @@ def _estimate_top_crimes(zone: dict, dt: datetime) -> list[dict]:
     if police_ratio < 0.7:
         base_weights["assault"] += (0.7 - police_ratio) * 0.2
         base_weights["robbery"] += (0.7 - police_ratio) * 0.12
+
+    # Place-of-occurrence weights (Table 17) — adjust by zone_type
+    zone_type = str(zone.get("zone_type", "mixed")).lower()
+    res_pct = float(zone.get("residential_crime_pct", 0.33))
+    hwy_pct = float(zone.get("highway_crime_pct", 0.15))
+    mkt_pct = float(zone.get("market_crime_pct", 0.20))
+
+    if zone_type == "residential":
+        base_weights["burglary"]           += res_pct * 0.12
+        base_weights["domestic_violence"]  += res_pct * 0.08
+    elif zone_type == "transit":
+        base_weights["robbery"]            += hwy_pct * 0.15
+        base_weights["vehicle_theft"]      += hwy_pct * 0.10
+    elif zone_type == "commercial":
+        base_weights["pickpocketing"]      += mkt_pct * 0.12
+        base_weights["cyber_fraud"]        += mkt_pct * 0.08
+
+    # Murder motive fractions (Table 19)
+    gang_pct     = float(zone.get("gang_murder_pct", 0.10))
+    domestic_pct = float(zone.get("domestic_murder_pct", 0.20))
+    base_weights["dacoity"]            += gang_pct * 0.10
+    base_weights["robbery"]            += gang_pct * 0.06
+    base_weights["domestic_violence"]  += domestic_pct * 0.08
+
+    # Police complaint rate (Table 25) — high complaint rate = lower trust / higher risk
+    complaint_rate = float(zone.get("police_complaint_rate", 0.30))
+    if complaint_rate > 0.5:
+        base_weights["assault"]  += complaint_rate * 0.04
+        base_weights["robbery"]  += complaint_rate * 0.03
 
     total = sum(base_weights.values())
     normalised = {k: max(v / total, 0) for k, v in base_weights.items()}

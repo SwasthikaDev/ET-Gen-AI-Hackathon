@@ -5,17 +5,17 @@ Uses ALL available NCRB datasets to build the richest possible
 district-level crime intelligence for 5 pilot cities.
 
 Sources used:
-  01 - District IPC crimes (base)
-  42 - District crimes against women
+  01  - District IPC crimes (base)
   02_01 - District crimes against SC
-  03 - District crimes against children
-  12 - Police strength (actual vs sanctioned)
-  10 - Property stolen & recovered (value)
-  30 - Auto theft by vehicle type
-  17 - Crime by place of occurrence
-  19 - Murder motives (gang/property/domestic)
-  23 - Anti-corruption cases
-  31 - Serious fraud value
+  02    - District crimes against ST (Scheduled Tribes)
+  03  - District crimes against children
+  12  - Police strength (actual vs sanctioned)
+  10  - Property stolen & recovered (value)
+  30  - Auto theft by vehicle type
+  17  - Crime by place of occurrence (residential/highway/market)
+  19  - Murder motives (gang/property/domestic)
+  25  - Complaints against police (accountability)
+  42  - District crimes against women
 """
 
 from __future__ import annotations
@@ -399,6 +399,202 @@ def load_auto_theft_detail() -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
+# 7. ST (Scheduled Tribe) crimes — district-level (Table 02)
+# ---------------------------------------------------------------------------
+
+def load_st_crimes() -> pd.DataFrame:
+    """District-wise crimes against Scheduled Tribes 2001-2014."""
+    files = sorted(RAW_DIR.rglob("02_District_wise_crimes_committed_against_ST_*.csv"))
+    dfs = []
+    for f in set(files):
+        df = _safe_load(f)
+        if df is None:
+            continue
+        rename = {}
+        for col in df.columns:
+            c = col.strip().lower()
+            if re.search(r"state|area", c):     rename[col] = "state"
+            elif re.search(r"^district$", c):   rename[col] = "district"
+            elif re.search(r"^year$", c):       rename[col] = "year"
+            elif re.search(r"^murder$", c):     rename[col] = "st_murder"
+            elif re.search(r"^rape$", c):       rename[col] = "st_rape"
+            elif re.search(r"^robbery$", c):    rename[col] = "st_robbery"
+            elif re.search(r"^hurt$", c):       rename[col] = "st_hurt"
+            elif re.search(r"^arson$", c):      rename[col] = "st_arson"
+        df = df.rename(columns=rename)
+        if not {"state", "district", "year"}.issubset(df.columns):
+            continue
+        # Deduplicate columns
+        seen: dict[str, int] = {}
+        dedup = []
+        for c in df.columns:
+            if c in seen:
+                seen[c] += 1; dedup.append(f"{c}_dup{seen[c]}")
+            else:
+                seen[c] = 0; dedup.append(c)
+        df.columns = dedup
+        df = df[[c for c in df.columns if "_dup" not in c]]
+        df["state"] = df["state"].apply(_norm)
+        df["district"] = df["district"].apply(_norm)
+        df["year"] = pd.to_numeric(df["year"].astype(str), errors="coerce").fillna(0).astype(int)
+        for col in [c for c in df.columns if c.startswith("st_")]:
+            s = df[col]
+            if isinstance(s, pd.DataFrame): s = s.iloc[:, 0]
+            df[col] = pd.to_numeric(s.astype(str), errors="coerce").fillna(0)
+        dfs.append(df)
+    if not dfs:
+        return pd.DataFrame()
+    combined = pd.concat(dfs, ignore_index=True).drop_duplicates(subset=["state", "district", "year"])
+    print(f"  ST crimes: {len(combined):,} district-year rows")
+    return combined
+
+
+# ---------------------------------------------------------------------------
+# 8. Crime by place of occurrence (Table 17) — state-level
+#    Tells us what fraction of crimes occur at residential / highway / market
+# ---------------------------------------------------------------------------
+
+def load_crime_by_place() -> pd.DataFrame:
+    """
+    Returns per-state, per-year fractions:
+      residential_crime_pct, highway_crime_pct, market_crime_pct
+    These weight zone_type crime probabilities.
+    """
+    files = sorted(RAW_DIR.rglob("17_Crime_by_place_of_occurrence_*.csv"))
+    dfs = []
+    for f in set(files):
+        df = _safe_load(f)
+        if df is None:
+            continue
+        df.columns = [c.strip() for c in df.columns]
+        # Identify state and year columns
+        state_col = next((c for c in df.columns if re.search(r"state|area", c.lower())), None)
+        year_col  = next((c for c in df.columns if re.search(r"^year$", c.lower())), None)
+        if not state_col or not year_col:
+            continue
+
+        df = df.rename(columns={state_col: "state", year_col: "year"})
+        df["state"] = df["state"].apply(_norm)
+        df["year"] = pd.to_numeric(df["year"].astype(str), errors="coerce").fillna(0).astype(int)
+
+        # Sum counts for each place category
+        res_cols = [c for c in df.columns if "RESIDENTIAL" in c.upper()]
+        hwy_cols = [c for c in df.columns if "HIGHWAY" in c.upper()]
+        mkt_cols = [c for c in df.columns if re.search(r"COMMERCIAL|MARKET|SHOP", c.upper())]
+
+        for cols, name in [(res_cols, "residential_count"), (hwy_cols, "highway_count"), (mkt_cols, "market_count")]:
+            if cols:
+                df[name] = df[cols].apply(pd.to_numeric, errors="coerce").fillna(0).sum(axis=1)
+            else:
+                df[name] = 0
+
+        df["place_total"] = df[["residential_count", "highway_count", "market_count"]].sum(axis=1)
+        dfs.append(df[["state", "year", "residential_count", "highway_count", "market_count", "place_total"]])
+
+    if not dfs:
+        return pd.DataFrame()
+
+    combined = pd.concat(dfs, ignore_index=True)
+    agg = combined.groupby(["state", "year"])[["residential_count", "highway_count", "market_count", "place_total"]].sum().reset_index()
+    agg["residential_crime_pct"] = (agg["residential_count"] / agg["place_total"].replace(0, np.nan)).fillna(0.33).clip(0, 1)
+    agg["highway_crime_pct"]     = (agg["highway_count"]     / agg["place_total"].replace(0, np.nan)).fillna(0.15).clip(0, 1)
+    agg["market_crime_pct"]      = (agg["market_count"]      / agg["place_total"].replace(0, np.nan)).fillna(0.20).clip(0, 1)
+    print(f"  Crime by place: {len(agg):,} state-year rows")
+    return agg[["state", "year", "residential_crime_pct", "highway_crime_pct", "market_crime_pct"]]
+
+
+# ---------------------------------------------------------------------------
+# 9. Murder motives (Table 19) — state-level
+#    gang_murder_pct (gain/terrorist), domestic_murder_pct (dowry/love/lunacy)
+# ---------------------------------------------------------------------------
+
+def load_murder_motives() -> pd.DataFrame:
+    f = _find_file("19_Motive_or_cause_of_murder_and_culpable_homicide_not_amounting_to_murder.csv")
+    if not f:
+        return pd.DataFrame()
+    df = _safe_load(f)
+    if df is None:
+        return pd.DataFrame()
+
+    rename = {}
+    for col in df.columns:
+        c = col.strip().lower()
+        if re.search(r"area_name|state", c):    rename[col] = "state"
+        elif re.search(r"^year$", c):           rename[col] = "year"
+    df = df.rename(columns=rename)
+    if "state" not in df.columns:
+        return pd.DataFrame()
+
+    df["state"] = df["state"].apply(_norm)
+    df["year"] = pd.to_numeric(df.get("year", 0), errors="coerce").fillna(0).astype(int)
+
+    # Gang/property motive: Gain + TerroristExtremist + ClassConflict
+    gang_cols = [c for c in df.columns if re.search(r"Gain|Terrorist|Class_Conflict|Political", c)]
+    # Domestic motive: Dowry + Love + Lunacy + Communalism
+    domestic_cols = [c for c in df.columns if re.search(r"Dowry|Love_Affair|Lunacy|Casteism|Communal", c)]
+
+    for cols, name in [(gang_cols, "gang_motive_count"), (domestic_cols, "domestic_motive_count")]:
+        if cols:
+            df[name] = df[cols].apply(pd.to_numeric, errors="coerce").fillna(0).sum(axis=1)
+        else:
+            df[name] = 0
+
+    all_motive_cols = [c for c in df.columns if c.startswith("CHNAMurder")]
+    if all_motive_cols:
+        df["total_motive_count"] = df[all_motive_cols].apply(pd.to_numeric, errors="coerce").fillna(0).sum(axis=1)
+    else:
+        df["total_motive_count"] = df[["gang_motive_count", "domestic_motive_count"]].sum(axis=1)
+
+    agg = df.groupby(["state", "year"])[["gang_motive_count", "domestic_motive_count", "total_motive_count"]].sum().reset_index()
+    agg["gang_murder_pct"]     = (agg["gang_motive_count"]     / agg["total_motive_count"].replace(0, np.nan)).fillna(0.1).clip(0, 1)
+    agg["domestic_murder_pct"] = (agg["domestic_motive_count"] / agg["total_motive_count"].replace(0, np.nan)).fillna(0.2).clip(0, 1)
+    print(f"  Murder motives: {len(agg):,} state-year rows")
+    return agg[["state", "year", "gang_murder_pct", "domestic_murder_pct"]]
+
+
+# ---------------------------------------------------------------------------
+# 10. Complaints against police (Table 25) — state-level
+#     complaint_rate = complaints_received / police_strength (normalized)
+# ---------------------------------------------------------------------------
+
+def load_police_complaints() -> pd.DataFrame:
+    f = _find_file("25_Complaints_against_police.csv")
+    if not f:
+        return pd.DataFrame()
+    df = _safe_load(f)
+    if df is None:
+        return pd.DataFrame()
+
+    rename = {}
+    for col in df.columns:
+        c = col.strip().lower()
+        if re.search(r"area_name|state", c):      rename[col] = "state"
+        elif re.search(r"^year$", c):             rename[col] = "year"
+        elif re.search(r"complaint.*receiv|alleged", c): rename[col] = "complaints_received"
+        elif re.search(r"cases_register", c):     rename[col] = "cases_registered"
+    df = df.rename(columns=rename)
+    if "state" not in df.columns:
+        return pd.DataFrame()
+
+    df["state"] = df["state"].apply(_norm)
+    df["year"] = pd.to_numeric(df.get("year", 0), errors="coerce").fillna(0).astype(int)
+    for col in ["complaints_received", "cases_registered"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col].astype(str), errors="coerce").fillna(0)
+
+    if "complaints_received" in df.columns:
+        agg = df.groupby(["state", "year"])["complaints_received"].sum().reset_index()
+        agg.columns = ["state", "year", "police_complaints_total"]
+        # Normalize 0-1 across all states per year
+        agg["police_complaint_rate"] = agg.groupby("year")["police_complaints_total"].transform(
+            lambda x: x / max(x.max(), 1)
+        ).clip(0, 1)
+        print(f"  Police complaints: {len(agg):,} state-year rows")
+        return agg[["state", "year", "police_complaint_rate"]]
+    return pd.DataFrame()
+
+
+# ---------------------------------------------------------------------------
 # State name normalisation for joining
 # ---------------------------------------------------------------------------
 
@@ -435,10 +631,14 @@ def build_enriched_district_profile(
     ipc_df: pd.DataFrame,
     women_df: pd.DataFrame,
     sc_df: pd.DataFrame,
+    st_df: pd.DataFrame,
     children_df: pd.DataFrame,
     police_df: pd.DataFrame,
     property_df: pd.DataFrame,
     auto_df: pd.DataFrame,
+    place_df: pd.DataFrame,
+    motives_df: pd.DataFrame,
+    complaints_df: pd.DataFrame,
     city: str,
 ) -> pd.DataFrame:
     """
@@ -469,6 +669,29 @@ def build_enriched_district_profile(
                 profile.get("w_domestic_cruelty", 0) * 2
             ).fillna(0)
             print(f"    Women safety index range: {profile['women_safety_index'].min():.0f}–{profile['women_safety_index'].max():.0f}")
+
+    # --- Join ST crimes (extends vulnerability_index) ---
+    if not st_df.empty:
+        st_city = st_df[st_df["district"].isin(
+            {d.upper() for d in CITY_DISTRICTS.get(city, [])}
+        )].copy()
+        if not st_city.empty:
+            st_cols = [c for c in st_city.columns if c.startswith("st_")]
+            st_agg = st_city.groupby(["district", "year"])[st_cols].sum().reset_index()
+            profile = profile.merge(st_agg, on=["district", "year"], how="left")
+            for c in st_cols:
+                profile[c] = profile[c].fillna(0)
+            # Add ST crimes into vulnerability_index (combined SC+ST)
+            st_contrib = (
+                profile.get("st_murder", 0) * 5 +
+                profile.get("st_rape", 0) * 4 +
+                profile.get("st_hurt", 0) * 2 +
+                profile.get("st_arson", 0) * 3
+            ).fillna(0)
+            if "vulnerability_index" in profile.columns:
+                profile["vulnerability_index"] = profile["vulnerability_index"] + st_contrib
+            else:
+                profile["vulnerability_index"] = st_contrib
 
     # --- Join SC crimes ---
     if not sc_df.empty:
@@ -537,6 +760,41 @@ def build_enriched_district_profile(
             profile["state_auto_theft_count"] = profile.get("state_auto_theft_count", pd.Series(0)).fillna(0)
         else:
             profile["state_auto_theft_count"] = 0
+
+    # --- Join crime-by-place fractions ---
+    if not place_df.empty:
+        place_df["state_norm"] = place_df["state"].apply(_resolve_state)
+        p_state = place_df[place_df["state_norm"] == city_state]
+        if not p_state.empty:
+            profile = profile.merge(
+                p_state[["state_norm", "year", "residential_crime_pct", "highway_crime_pct", "market_crime_pct"]],
+                on=["state_norm", "year"], how="left"
+            )
+        for col in ["residential_crime_pct", "highway_crime_pct", "market_crime_pct"]:
+            profile[col] = profile.get(col, pd.Series(dtype=float)).fillna(0.33 if "residential" in col else 0.15)
+
+    # --- Join murder motives ---
+    if not motives_df.empty:
+        motives_df["state_norm"] = motives_df["state"].apply(_resolve_state)
+        m_state = motives_df[motives_df["state_norm"] == city_state]
+        if not m_state.empty:
+            profile = profile.merge(
+                m_state[["state_norm", "year", "gang_murder_pct", "domestic_murder_pct"]],
+                on=["state_norm", "year"], how="left"
+            )
+        profile["gang_murder_pct"]     = profile.get("gang_murder_pct", pd.Series(dtype=float)).fillna(0.10)
+        profile["domestic_murder_pct"] = profile.get("domestic_murder_pct", pd.Series(dtype=float)).fillna(0.20)
+
+    # --- Join police complaints rate ---
+    if not complaints_df.empty:
+        complaints_df["state_norm"] = complaints_df["state"].apply(_resolve_state)
+        c_state = complaints_df[complaints_df["state_norm"] == city_state]
+        if not c_state.empty:
+            profile = profile.merge(
+                c_state[["state_norm", "year", "police_complaint_rate"]],
+                on=["state_norm", "year"], how="left"
+            )
+        profile["police_complaint_rate"] = profile.get("police_complaint_rate", pd.Series(dtype=float)).fillna(0.3)
 
     return profile
 
@@ -607,11 +865,17 @@ def district_to_hourly_zones_enriched(
         zone_shares = rng.dirichlet(np.ones(zones_per_district) * 2)
 
         # District-level enriched features (will be attached to all zone records)
-        police_ratio = float(row.get("police_coverage_ratio", 0.75))
-        women_idx = float(row.get("women_safety_index", 0))
-        vuln_idx = float(row.get("vulnerability_index", 0))
-        prop_value = float(row.get("property_value_stolen_lakh", 0))
-        auto_count = float(row.get("state_auto_theft_count", 0))
+        police_ratio    = float(row.get("police_coverage_ratio", 0.75))
+        women_idx       = float(row.get("women_safety_index", 0))
+        vuln_idx        = float(row.get("vulnerability_index", 0))
+        prop_value      = float(row.get("property_value_stolen_lakh", 0))
+        auto_count      = float(row.get("state_auto_theft_count", 0))
+        res_pct         = float(row.get("residential_crime_pct", 0.33))
+        hwy_pct         = float(row.get("highway_crime_pct", 0.15))
+        mkt_pct         = float(row.get("market_crime_pct", 0.20))
+        gang_mur_pct    = float(row.get("gang_murder_pct", 0.10))
+        dom_mur_pct     = float(row.get("domestic_murder_pct", 0.20))
+        complaint_rate  = float(row.get("police_complaint_rate", 0.30))
 
         for zone_i in range(1, zones_per_district + 1):
             zone_share = zone_shares[zone_i - 1]
@@ -654,11 +918,17 @@ def district_to_hourly_zones_enriched(
                         "wind_speed_kmh": round(float(abs(rng.normal(12, 5))), 1),
                         "is_rainy": int(precip > 1),
                         # Enriched district features
-                        "police_coverage_ratio": round(police_ratio, 3),
-                        "women_safety_index": round(women_idx, 1),
-                        "vulnerability_index": round(vuln_idx, 1),
-                        "property_value_stolen_lakh": round(prop_value, 1),
-                        "state_auto_theft_count": int(auto_count),
+                        "police_coverage_ratio":      round(police_ratio, 3),
+                        "women_safety_index":          round(women_idx, 1),
+                        "vulnerability_index":         round(vuln_idx, 1),
+                        "property_value_stolen_lakh":  round(prop_value, 1),
+                        "state_auto_theft_count":      int(auto_count),
+                        "residential_crime_pct":       round(res_pct, 3),
+                        "highway_crime_pct":           round(hwy_pct, 3),
+                        "market_crime_pct":            round(mkt_pct, 3),
+                        "gang_murder_pct":             round(gang_mur_pct, 3),
+                        "domestic_murder_pct":         round(dom_mur_pct, 3),
+                        "police_complaint_rate":       round(complaint_rate, 3),
                     })
 
     return pd.DataFrame(records)
@@ -671,13 +941,15 @@ def build_enriched_zones(city: str, profile_df: pd.DataFrame) -> pd.DataFrame:
     zones: list[dict] = []
 
     # Per-district aggregated enrichment (average across years)
-    district_agg = profile_df.groupby("district").agg({
-        "women_safety_index": "mean",
-        "vulnerability_index": "mean",
-        "police_coverage_ratio": "mean",
-        "property_value_stolen_lakh": "mean",
-        "state_auto_theft_count": "mean",
-    }).fillna(0).to_dict("index")
+    agg_cols = {
+        c: "mean" for c in [
+            "women_safety_index", "vulnerability_index", "police_coverage_ratio",
+            "property_value_stolen_lakh", "state_auto_theft_count",
+            "residential_crime_pct", "highway_crime_pct", "market_crime_pct",
+            "gang_murder_pct", "domestic_murder_pct", "police_complaint_rate",
+        ] if c in profile_df.columns
+    }
+    district_agg = profile_df.groupby("district").agg(agg_cols).fillna(0).to_dict("index")
 
     for district in districts:
         base_lat, base_lon = DISTRICT_CENTROIDS.get(district, (20.0, 78.0))
@@ -701,12 +973,18 @@ def build_enriched_zones(city: str, profile_df: pd.DataFrame) -> pd.DataFrame:
                 "road_density":             round(float(rng.uniform(0.2, 1.0)), 2),
                 "lighting_score":           round(float(rng.uniform(0.3, 1.0)), 2),
                 "is_hotspot": False,
-                # Enriched features from NCRB multi-source
-                "women_safety_index":       round(float(d_feats.get("women_safety_index", 0)), 1),
-                "vulnerability_index":      round(float(d_feats.get("vulnerability_index", 0)), 1),
-                "police_coverage_ratio":    round(float(d_feats.get("police_coverage_ratio", 0.75)), 3),
+                # Enriched features from NCRB multi-source (11 datasets)
+                "women_safety_index":         round(float(d_feats.get("women_safety_index", 0)), 1),
+                "vulnerability_index":        round(float(d_feats.get("vulnerability_index", 0)), 1),
+                "police_coverage_ratio":      round(float(d_feats.get("police_coverage_ratio", 0.75)), 3),
                 "property_value_stolen_lakh": round(float(d_feats.get("property_value_stolen_lakh", 0)), 1),
-                "state_auto_theft_count":   int(d_feats.get("state_auto_theft_count", 0)),
+                "state_auto_theft_count":     int(d_feats.get("state_auto_theft_count", 0)),
+                "residential_crime_pct":      round(float(d_feats.get("residential_crime_pct", 0.33)), 3),
+                "highway_crime_pct":          round(float(d_feats.get("highway_crime_pct", 0.15)), 3),
+                "market_crime_pct":           round(float(d_feats.get("market_crime_pct", 0.20)), 3),
+                "gang_murder_pct":            round(float(d_feats.get("gang_murder_pct", 0.10)), 3),
+                "domestic_murder_pct":        round(float(d_feats.get("domestic_murder_pct", 0.20)), 3),
+                "police_complaint_rate":      round(float(d_feats.get("police_complaint_rate", 0.30)), 3),
             })
 
     return pd.DataFrame(zones)
@@ -737,15 +1015,19 @@ def load_and_prepare_enriched(
     print("\n[A] Loading all NCRB data sources...")
     ipc_df = load_ncrb_raw(data_dir)
 
-    print("\n[B] Loading supplementary crime sources...")
+    print("\n[B] Loading supplementary district-level crime sources...")
     women_df    = load_women_crimes()
     sc_df       = load_sc_crimes()
+    st_df       = load_st_crimes()
     children_df = load_children_crimes()
 
     print("\n[C] Loading state-level context features...")
-    police_df   = load_police_strength()
-    property_df = load_property_value()
-    auto_df     = load_auto_theft_detail()
+    police_df     = load_police_strength()
+    property_df   = load_property_value()
+    auto_df       = load_auto_theft_detail()
+    place_df      = load_crime_by_place()
+    motives_df    = load_murder_motives()
+    complaints_df = load_police_complaints()
 
     all_records: list[pd.DataFrame] = []
     all_zones: list[pd.DataFrame] = []
@@ -761,8 +1043,9 @@ def load_and_prepare_enriched(
         print(f"  IPC rows: {len(city_ipc)} | years {years[0]}–{years[-1]}")
 
         profile = build_enriched_district_profile(
-            city_ipc, women_df, sc_df, children_df,
-            police_df, property_df, auto_df, city
+            city_ipc, women_df, sc_df, st_df, children_df,
+            police_df, property_df, auto_df,
+            place_df, motives_df, complaints_df, city
         )
 
         records_df = district_to_hourly_zones_enriched(profile, city)

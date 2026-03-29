@@ -120,6 +120,12 @@ def attach_zone_features(df: pd.DataFrame, zones_df: pd.DataFrame) -> pd.DataFra
             "police_coverage_ratio",
             "property_value_stolen_lakh",
             "state_auto_theft_count",
+            "residential_crime_pct",
+            "highway_crime_pct",
+            "market_crime_pct",
+            "gang_murder_pct",
+            "domestic_murder_pct",
+            "police_complaint_rate",
         ] if c in zones_df.columns
     ]
     merge_cols = base_cols + enriched_cols
@@ -165,12 +171,21 @@ FEATURE_COLS = [
     "nearest_police_station_km",
     "road_density",
     "lighting_score",
-    # Enriched NCRB multi-source features
+    # Enriched NCRB multi-source features (Tables 42, 02, 02_01, 03, 12, 10, 30)
     "women_safety_index",
     "vulnerability_index",
     "police_coverage_ratio",
     "property_value_stolen_lakh",
     "state_auto_theft_count",
+    # Place-of-occurrence fractions (Table 17)
+    "residential_crime_pct",
+    "highway_crime_pct",
+    "market_crime_pct",
+    # Murder motives (Table 19)
+    "gang_murder_pct",
+    "domestic_murder_pct",
+    # Police accountability (Table 25)
+    "police_complaint_rate",
 ]
 
 
@@ -258,11 +273,20 @@ def build_inference_row(
         "nearest_police_station_km": zone.get("nearest_police_station_km", 1.5),
         "road_density": zone.get("road_density", 0.6),
         "lighting_score": zone.get("lighting_score", 0.7),
-        # Enriched NCRB features (populated from zones metadata)
-        "women_safety_index": zone.get("women_safety_index", 0.0),
-        "vulnerability_index": zone.get("vulnerability_index", 0.0),
-        "police_coverage_ratio": zone.get("police_coverage_ratio", 0.75),
+        # Enriched NCRB features (from zones metadata)
+        "women_safety_index":         zone.get("women_safety_index", 0.0),
+        "vulnerability_index":        zone.get("vulnerability_index", 0.0),
+        "police_coverage_ratio":      zone.get("police_coverage_ratio", 0.75),
         "property_value_stolen_lakh": zone.get("property_value_stolen_lakh", 0.0),
-        "state_auto_theft_count": zone.get("state_auto_theft_count", 0),
+        "state_auto_theft_count":     zone.get("state_auto_theft_count", 0),
+        # Place-of-occurrence (Table 17)
+        "residential_crime_pct":      zone.get("residential_crime_pct", 0.33),
+        "highway_crime_pct":          zone.get("highway_crime_pct", 0.15),
+        "market_crime_pct":           zone.get("market_crime_pct", 0.20),
+        # Murder motives (Table 19)
+        "gang_murder_pct":            zone.get("gang_murder_pct", 0.10),
+        "domestic_murder_pct":        zone.get("domestic_murder_pct", 0.20),
+        # Police accountability (Table 25)
+        "police_complaint_rate":      zone.get("police_complaint_rate", 0.30),
     }
     return pd.DataFrame([row])
